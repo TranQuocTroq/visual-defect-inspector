@@ -1,0 +1,22 @@
+# Model weights
+models/*.pt
+models/*.onnx
+
+# Data
+data/raw/
+data/samples/*.png
+data/samples/*.jpg
+
+# Python
+__pycache__/
+*.pyc
+.env
+venv/
+*.egg-info/
+
+# Kaggle
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db
