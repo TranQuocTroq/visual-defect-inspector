@@ -1,54 +1,34 @@
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import JSONResponse
+import os
 import cv2
 import numpy as np
 import base64
-from pathlib import Path
-import sys
-
-sys.path.append(str(Path(__file__).parent.parent))
+from fastapi import FastAPI, File, UploadFile, Form
 from src.detector import DefectDetector
 
-app = FastAPI(title="Visual Defect Inspector API")
+app = FastAPI(title="Industrial Defect Detection API")
 
-# Initialize detector once at server startup
-detector = DefectDetector(
-    model_path="models/best.pt",
-    conf_threshold=0.25
-)
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODELS_DIR = os.path.join(ROOT_DIR, "models")
+detector = DefectDetector(MODELS_DIR)
 
-
-@app.get("/health")
-def health_check():
-    """Check if API server is running."""
-    return {"status": "ok"}
-
-
-@app.post("/inspect")
-async def inspect_image(file: UploadFile = File(...)):
+# FIX: Hide this endpoint from OpenAPI schema to prevent Gradio parsing crash
+@app.post("/inspect", include_in_schema=False)
+async def inspect_api(product: str = Form(...), file: UploadFile = File(...)):
     """
-    Receive an image file, return:
-    - defect_count : number of defects detected
-    - detections   : list of detected defects with box and score
-    - image_base64 : annotated image with bounding boxes (base64 encoded)
+    Rest API endpoint for external integration.
     """
-    # Read image from request
-    contents = await file.read()
-    nparr    = np.frombuffer(contents, np.uint8)
-    image    = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-    # Run detection
-    detections = detector.predict(image)
-
-    # Draw bounding boxes on image
-    annotated = detector.annotate(image, detections)
-
-    # Encode image to base64 for JSON response
-    _, buffer = cv2.imencode('.jpg', annotated)
-    img_base64 = base64.b64encode(buffer).decode('utf-8')
-
-    return JSONResponse({
-        "defect_count": len(detections),
-        "detections"  : detections,
-        "image_base64": img_base64
-    })
+    data = await file.read()
+    img_np = np.frombuffer(data, np.uint8)
+    img_bgr = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
+    
+    status, result_img, is_defect = detector.inspect(img_bgr, product)
+    
+    _, buffer = cv2.imencode('.jpg', result_img)
+    encoded_img = base64.b64encode(buffer).decode('utf-8')
+    
+    return {
+        "product": product,
+        "status": status,
+        "is_defect": is_defect,
+        "image_data": encoded_img
+    }

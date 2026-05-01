@@ -1,84 +1,109 @@
 import gradio as gr
-import requests
-import base64
-import numpy as np
 import cv2
+import os
+from src.detector import DefectDetector
 
+# Path resolution
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODELS_DIR = os.path.join(ROOT_DIR, "models")
 
-API_URL = "http://127.0.0.1:8000"
+# CSS to force square aspect ratio and remove black empty space
+custom_css = """
+#live-monitor {
+    aspect-ratio: 1 / 1 !important;
+    width: 100% !important;
+    height: auto !important;
+}
+#live-monitor .image-container, #live-monitor img {
+    height: 100% !important;
+    width: 100% !important;
+    object-fit: contain !important;
+}
+"""
 
+detector = DefectDetector(MODELS_DIR)
 
-def inspect(image: np.ndarray):
-    """Send image to API, return annotated image and detection summary."""
-    if image is None:
-        return None, "No image uploaded."
+def process_video_stream(video_path, product_name):
+    if not video_path:
+        yield None, [], "Error: No input video. Please upload or select a sample."
+        return
 
-    # Convert numpy array to bytes for API request
-    _, buffer = cv2.imencode('.jpg', cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-    img_bytes = buffer.tobytes()
+    cap = cv2.VideoCapture(video_path)
+    gallery = []
+    total, defects = 0, 0
 
-    # Send to API
-    response = requests.post(
-        f"{API_URL}/inspect",
-        files={"file": ("image.jpg", img_bytes, "image/jpeg")}
-    )
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        total += 1
+        status, annotated_frame, is_defect = detector.inspect(frame, product_name)
+        img_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+        
+        if is_defect:
+            defects += 1
+            if len(gallery) < 15:
+                gallery.append((img_rgb.copy(), status))
+            color = (255, 0, 0)
+        else:
+            color = (0, 255, 0)
+            
+        cv2.putText(img_rgb, status, (20, 50), cv2.FONT_HERSHEY_DUPLEX, 1.0, color, 2)
+        
+        yield_rate = ((total - defects) / total) * 100 if total > 0 else 0
+        report = (
+            f"FACTORY ANALYTICS REPORT\n"
+            f"Product: {product_name.upper()}\n"
+            f"Total Inspected: {total}\n"
+            f"Defects Blocked: {defects}\n"
+            f"Production Yield: {yield_rate:.2f}%"
+        )
+        
+        yield img_rgb, gallery, report
 
-    if response.status_code != 200:
-        return None, "API error. Make sure the server is running."
+    cap.release()
 
-    data = response.json()
-
-    # Decode annotated image from base64
-    img_data  = base64.b64decode(data["image_base64"])
-    img_array = np.frombuffer(img_data, np.uint8)
-    annotated = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-    annotated = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-
-    # Build summary text
-    count   = data["defect_count"]
-    summary = f"Defects found: {count}\n\n"
-
-    if count == 0:
-        summary += "No defects detected — product passed QC."
-    else:
-        summary += "Defects detected:\n"
-        for i, det in enumerate(data["detections"]):
-            box   = [round(v) for v in det["box"]]
-            score = det["score"]
-            summary += f"  Defect {i+1}: confidence {score:.0%}, location {box}\n"
-
-    return annotated, summary
-
-
-with gr.Blocks(title="Visual Defect Inspector") as demo:
-    gr.Markdown("# Visual Defect Inspector")
-    gr.Markdown("Upload a product image to detect surface defects using AI.")
-
-    with gr.Row():
-        input_image  = gr.Image(label="Input image", type="numpy", height=400)
-        output_image = gr.Image(label="Inspection result", height=400)
-
-    output_text = gr.Textbox(label="Detection summary", lines=4)
-    btn         = gr.Button("Inspect", variant="primary")
-
+with gr.Blocks(theme=gr.themes.Soft(), css=custom_css) as demo:
+    gr.Markdown("# Industrial Quality Control System (Hybrid AI)")
+    
+    with gr.Row(equal_height=False):
+        with gr.Column(scale=1):
+            product_type = gr.Dropdown(
+                choices=["wood", "zipper", "pill"], 
+                value="wood", 
+                label="Product Line Selection"
+            )
+            input_vid = gr.Video(label="Conveyor Input", height=400)
+            btn = gr.Button("RUN ANALYSIS", variant="primary")
+            results = gr.Textbox(label="Operational Statistics", lines=6)
+        
+        with gr.Column(scale=1):
+            output_live = gr.Image(
+                label="Live AI Insight Monitor", 
+                interactive=False, 
+                elem_id="live-monitor"
+            )
+            
+    gr.Markdown("### Captured Defects Gallery")
+    gallery = gr.Gallery(label="Detection History", columns=5, height="auto")
+    
+    # Disable auto-API generation for the button to prevent Gradio schema parsing crash
     btn.click(
-        fn=inspect,
-        inputs=input_image,
-        outputs=[output_image, output_text]
+        fn=process_video_stream, 
+        inputs=[input_vid, product_type], 
+        outputs=[output_live, gallery, results],
+        api_name=False
     )
 
-    gr.Examples(
-        examples=[
-            ["data/samples/sample_bottle_broken_large.png"],
-            ["data/samples/sample_bottle_broken_small.png"],
-            ["data/samples/sample_bottle_contamination.png"],
-            ["data/samples/sample_metal_nut_bent.png"],
-            ["data/samples/sample_metal_nut_scratch.png"],
-            ["data/samples/sample_bottle_good.png"],
-        ],
-        inputs=input_image,
-        label="Sample images — click to test"
-    )
-
-if __name__ == "__main__":
-    demo.launch()
+    # Display sample videos dynamically from the data/samples folder
+    example_folder = os.path.join(ROOT_DIR, "data", "samples")
+    if os.path.exists(example_folder):
+        vid_files = [[os.path.join(example_folder, f)] for f in os.listdir(example_folder) if f.endswith('.mp4')]
+        if vid_files:
+            gr.Examples(
+                examples=vid_files, 
+                inputs=input_vid,
+                label="Or click on an available sample video below to run the demo:",
+                api_name=False
+            )
