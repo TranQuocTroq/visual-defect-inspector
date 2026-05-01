@@ -134,9 +134,6 @@ visual-defect-inspector/
 │   ├── patchcore_wood.pt
 │   ├── patchcore_zipper.pt
 │   └── patchcore_pill.pt
-├── notebooks/
-│   ├── train_yolo.ipynb
-│   └── train_patchcore.ipynb
 ├── data/
 │   └── samples/             # Demo videos (wood.mp4, zipper.mp4, pill.mp4)
 ├── tests/
@@ -250,7 +247,7 @@ curl -X POST "http://localhost:7860/inspect" \
 
 ## Training
 
-All training was performed on [Kaggle](https://www.kaggle.com) using a free NVIDIA T4 GPU. Notebooks are provided in the `notebooks/` directory.
+All training was performed on [Kaggle](https://www.kaggle.com) using a free NVIDIA T4 GPU.
 
 ### Stage 1 — YOLOv8
 
